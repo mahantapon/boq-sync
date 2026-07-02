@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BOQ Sync — แปลง BOQ เก่า → Master Template</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<style>
+  :root {
+    --blue: #cfe8f5;      /* BOQ ราคาขาย */
+    --blue-dark: #1a6e9e;
+    --pink: #f5d5ea;      /* ต้นทุน Budget */
+    --pink-dark: #a83280;
+    --green: #1f8a4c;
+    --red: #c0392b;
+    --bg: #f4f6f8;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Sukhumvit Set", "Noto Sans Thai", sans-serif; margin: 0; background: var(--bg); color: #222; }
+  header { background: #16324f; color: #fff; padding: 18px 28px; }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; font-size: 13px; opacity: .8; }
+  main { max-width: 1250px; margin: 0 auto; padding: 20px; }
+  .card { background: #fff; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.08); padding: 18px 20px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 15px; color: #16324f; }
+  .settings { display: flex; gap: 14px; flex-wrap: wrap; }
+  .settings label { font-size: 12px; color: #555; display: block; margin-bottom: 4px; }
+  .settings input, .settings select { padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; font-family: inherit; min-width: 160px; }
+  .settings .field.wide input { min-width: 280px; }
+  #dropzone { border: 2px dashed #9ab4c8; border-radius: 10px; padding: 36px 20px; text-align: center; cursor: pointer; transition: .15s; background: #fbfdfe; }
+  #dropzone.dragover { border-color: var(--blue-dark); background: #eaf5fb; }
+  #dropzone .big { font-size: 16px; font-weight: 600; color: #16324f; }
+  #dropzone .small { font-size: 13px; color: #777; margin-top: 6px; }
+  .legend { display: flex; gap: 16px; font-size: 12px; margin-top: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; border: 1px solid rgba(0,0,0,.15); }
+  #summary { display: none; }
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .stat { background: #f0f4f7; border-radius: 8px; padding: 10px 16px; min-width: 150px; }
+  .stat .label { font-size: 11px; color: #666; }
+  .stat .value { font-size: 18px; font-weight: 700; color: #16324f; margin-top: 2px; }
+  .stat.ok .value { color: var(--green); }
+  .stat.warn .value { color: var(--red); }
+  .checks { font-size: 13px; line-height: 1.7; }
+  .checks .pass::before { content: "✅ "; }
+  .checks .fail::before { content: "⚠️ "; }
+  .table-wrap { overflow: auto; max-height: 520px; border: 1px solid #ddd; border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; white-space: nowrap; }
+  th, td { border: 1px solid #e3e6e9; padding: 5px 8px; }
+  thead th { position: sticky; top: 0; background: #16324f; color: #fff; font-weight: 600; z-index: 2; }
+  thead tr.sub th { top: 29px; font-weight: 400; font-size: 11px; }
+  th.boq, thead tr.sub th.boq { background: var(--blue-dark); }
+  th.budget, thead tr.sub th.budget { background: var(--pink-dark); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.boq { background: var(--blue); }
+  td.budget { background: var(--pink); }
+  tr.section td { background: #e8eef3; font-weight: 700; color: #16324f; }
+  tr.item td.desc { padding-left: 18px; }
+  .btnrow { margin-top: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button.primary { background: #1f8a4c; color: #fff; border: 0; border-radius: 8px; padding: 12px 26px; font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  button.primary:hover { background: #18703d; }
+  button.ghost { background: #fff; color: #16324f; border: 1px solid #b8c6d2; border-radius: 8px; padding: 11px 18px; font-size: 13px; cursor: pointer; font-family: inherit; }
+  #status { font-size: 13px; color: #555; }
+  footer { text-align: center; font-size: 11px; color: #999; padding: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏗️ BOQ Sync — แปลง BOQ เก่า → Master Template</h1>
+  <p>หยอดไฟล์ BOQ เก่า (ฟอร์มคุณกี้) → ตรวจสอบข้อมูล → Export เป็น Excel ตามฟอร์ม Master Template | ข้อมูลประมวลผลในเครื่องคุณเท่านั้น ไม่ถูกอัปโหลดไปไหน</p>
+</header>
+<main>
+
+  <div class="card">
+    <h2>1) ตั้งค่าโปรเจกต์</h2>
+    <div class="settings">
+      <div class="field"><label>Job Code</label><input id="jobCode" value="001"></div>
+      <div class="field"><label>Group Code</label><input id="groupCode" value="RN-001"></div>
+      <div class="field wide"><label>Group Name</label><input id="groupName" value="งานรีโนเวทและต่อเติมบ้านเดี่ยว"></div>
+      <div class="field"><label>ชีทข้อมูล (เลือกหลังหยอดไฟล์)</label><select id="sheetSelect" disabled><option>— ยังไม่มีไฟล์ —</option></select></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2) หยอดไฟล์ BOQ เก่า</h2>
+    <div id="dropzone">
+      <div class="big">ลากไฟล์ .xlsx มาวางตรงนี้ หรือคลิกเพื่อเลือกไฟล์</div>
+      <div class="small">รองรับฟอร์ม BOQ ต้นทุน (Item / Description / QTY / ราคาขาย / ต้นทุน)</div>
+      <input type="file" id="fileInput" accept=".xlsx,.xlsm" style="display:none">
+    </div>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--blue)"></span> สีฟ้า = BOQ ราคาขาย → คอลัมน์ (BOQ) ใน Template</span>
+      <span><span class="swatch" style="background:var(--pink)"></span> สีชมพู = ต้นทุน → คอลัมน์ (Budget) ใน Template</span>
+    </div>
+  </div>
+
+  <div class="card" id="summary">
+    <h2>3) ตรวจสอบข้อมูล (Sync Check)</h2>
+    <div class="stats" id="stats"></div>
+    <div class="checks" id="checks"></div>
+    <div class="table-wrap" style="margin-top:12px">
+      <table id="preview">
+        <thead>
+          <tr>
+            <th rowspan="2">Description</th><th rowspan="2">QTY</th><th rowspan="2">หน่วย</th>
+            <th class="budget" colspan="3">ต้นทุน (Budget)</th>
+            <th class="boq" colspan="3">ราคาขาย (BOQ)</th>
+          </tr>
+          <tr class="sub">
+            <th class="budget">วัสดุ/หน่วย</th><th class="budget">แรง/หน่วย</th><th class="budget">รวมต้นทุน</th>
+            <th class="boq">วัสดุ/หน่วย</th><th class="boq">แรง/หน่วย</th><th class="boq">รวมขาย</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="btnrow">
+      <button class="primary" id="exportBtn">⬇️ Export เป็น Excel (ฟอร์ม Master Template)</button>
+      <button class="ghost" id="changeTemplateBtn">เปลี่ยนไฟล์ Template</button>
+      <input type="file" id="templateInput" accept=".xlsx" style="display:none">
+      <input type="checkbox" id="includeDetail" style="display:none">
+      <span id="status"></span>
+    </div>
+  </div>
+
+</main>
+<footer>Best home · BOQ Sync Tool · ทำงานฝั่ง browser ทั้งหมด (ต้องต่ออินเทอร์เน็ตครั้งแรกเพื่อโหลดไลบรารี)</footer>
+
+<script>
+const TEMPLATE_B64 = "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";
+let templateBuffer = null;   // ArrayBuffer of master template (embedded or user-supplied)
+let parsedRows = [];         // {type:'section'|'item', desc, qty, unit, sellMat, sellLab, costMat, costLab, srcRow, issues[]}
+let grandTotals = null;      // from รวมค่าก่อสร้างทั้งหมด row
+let sourceName = "";
+let currentWb = null;
+
+function b64ToBuf(b64){
+  const bin = atob(b64); const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return buf.buffer;
+}
+templateBuffer = b64ToBuf(TEMPLATE_B64);
+
+const fmt = n => (n == null || isNaN(n)) ? "-" : n.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const num = v => { const n = typeof v === "string" ? parseFloat(v.replace(/,/g, "")) : v; return (typeof n === "number" && isFinite(n)) ? n : 0; };
+
+// ---------- file loading ----------
+const dz = document.getElementById("dropzone");
+const fi = document.getElementById("fileInput");
+dz.addEventListener("click", () => fi.click());
+dz.addEventListener("dragover", e => { e.preventDefault(); dz.classList.add("dragover"); });
+dz.addEventListener("dragleave", () => dz.classList.remove("dragover"));
+dz.addEventListener("drop", e => { e.preventDefault(); dz.classList.remove("dragover"); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+fi.addEventListener("change", () => { if (fi.files[0]) loadFile(fi.files[0]); });
+
+async function loadFile(file){
+  sourceName = file.name.replace(/\.(xlsx|xlsm)$/i, "");
+  const buf = await file.arrayBuffer();
+  currentWb = XLSX.read(buf, {type: "array"});
+  // pick best sheet: has ต้นทุน columns in header row 1
+  const sel = document.getElementById("sheetSelect");
+  sel.innerHTML = ""; sel.disabled = false;
+  let best = null, bestScore = -1;
+  currentWb.SheetNames.forEach(name => {
+    const ws = currentWb.Sheets[name];
+    let score = 0;
+    const cell = (a) => { const c = ws[a]; return c ? String(c.v) : ""; };
+    if (cell("A1").includes("Item")) score += 1;
+    if (cell("C1").includes("Description")) score += 1;
+    for (const a of ["N1","O1","L1","M1"]) if (cell(a).includes("ต้นทุน")) score += 2;
+    if (name.includes("ต้นทุน")) score += 1;
+    const opt = document.createElement("option");
+    opt.value = name; opt.textContent = name;
+    sel.appendChild(opt);
+    if (score > bestScore) { bestScore = score; best = name; }
+  });
+  sel.value = best;
+  sel.onchange = () => parseAndRender(sel.value);
+  parseAndRender(best);
+}
+
+// ---------- parsing (fixed column layout of the old BOQ form) ----------
+// A=Item, C=Description, D=QTY, E=Unit, F=วัสดุขาย/หน่วย, G=รวมวัสดุขาย, H=แรงขาย/หน่วย, I=รวมแรงขาย,
+// N=รวมวัสดุต้นทุน, O=รวมแรงต้นทุน, P=รวมขาย
+function parseAndRender(sheetName){
+  const ws = currentWb.Sheets[sheetName];
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+  const get = (r, c) => { const cell = ws[XLSX.utils.encode_cell({r: r-1, c: c-1})]; return cell ? cell.v : null; };
+
+  parsedRows = []; grandTotals = null;
+  for (let r = 3; r <= range.e.r + 1; r++) {
+    const rawDesc = get(r, 3);
+    if (rawDesc == null || String(rawDesc).trim() === "") continue;
+    if (typeof rawDesc === "number") continue;
+    const desc = String(rawDesc).trim();
+    if (/^รวมค่าก่อสร้าง/.test(desc)) {
+      grandTotals = { sell: num(get(r, 16)), costMat: num(get(r, 14)), costLab: num(get(r, 15)), row: r };
+      break; // จบตาราง
+    }
+    if (/^รวมหมวด/.test(desc)) continue;
+
+    const qty = num(get(r, 4));
+    const unit = get(r, 5) ? String(get(r, 5)).trim() : "";
+    const unitMatPrice = num(get(r, 6)), sellMatTotal = num(get(r, 7));
+    const unitLabPrice = num(get(r, 8)), sellLabTotal = num(get(r, 9));
+    const costMat = num(get(r, 14)), costLab = num(get(r, 15));
+    const lineTotal = num(get(r, 16)); // P รวมขายต่อบรรทัด — ตัวบอกว่าแถวนี้ถูกนับในยอดรวมของไฟล์เดิมหรือไม่
+
+    if (qty > 0) {
+      const issues = [];
+      // ยึด "ยอดรวม ÷ QTY" เป็นหลัก — บางแถวราคาต่อหน่วยเก่าค้างไว้ไม่ตรงกับยอดรวมจริง
+      if (sellMatTotal > 0 && Math.abs(unitMatPrice * qty - sellMatTotal) > 1) issues.push(`ราคาวัสดุ/หน่วยเดิม ${fmt(unitMatPrice)} ไม่ตรงยอดรวม → ใช้ ${fmt(sellMatTotal / qty)}`);
+      if (sellLabTotal > 0 && Math.abs(unitLabPrice * qty - sellLabTotal) > 1) issues.push(`ค่าแรง/หน่วยเดิม ${fmt(unitLabPrice)} ไม่ตรงยอดรวม → ใช้ ${fmt(sellLabTotal / qty)}`);
+      // แถวแจกแจง: มียอดขาย G+I แต่ช่อง P (รวมขาย) ว่าง = ไฟล์เดิมไม่นับแถวนี้ในยอดรวม
+      const detail = (sellMatTotal + sellLabTotal) > 0.5 && lineTotal < 0.5;
+      parsedRows.push({ type: "item", flag: detail ? "detail" : "", desc, qty, unit,
+        sellMatTotal, sellLabTotal, unitMatPrice, unitLabPrice, costMat, costLab, srcRow: r, issues });
+    } else if (Math.abs(costMat) > 0.001 || Math.abs(costLab) > 0.001 || (sellMatTotal + sellLabTotal) > 0.5) {
+      // แถวเหมารวม (เช่น "คงเหลือ") มีตัวเงินแต่ไม่มี QTY → นับเป็น QTY = 1
+      parsedRows.push({ type: "item", flag: "lump", desc, qty: 1, unit,
+        sellMatTotal, sellLabTotal, unitMatPrice: sellMatTotal, unitLabPrice: sellLabTotal, costMat, costLab, srcRow: r, issues: [] });
+    } else if (unitMatPrice > 0 || unitLabPrice > 0) {
+      // แถวราคาอ้างอิง: มีราคาต่อหน่วยแต่ไม่มี QTY/ยอดรวม → เก็บราคาไว้ ไม่กระทบยอด
+      parsedRows.push({ type: "item", flag: "ref", desc, qty: null, unit,
+        sellMatTotal: 0, sellLabTotal: 0, unitMatPrice, unitLabPrice, costMat: 0, costLab: 0, srcRow: r, issues: [] });
+    } else {
+      parsedRows.push({ type: "section", desc, srcRow: r });
+    }
+  }
+  render();
+}
+
+// ราคาขายต่อหน่วยที่ใช้จริง (ยึดยอดรวม ÷ QTY)
+function sellUnit(row){
+  if (row.flag === "ref") return { mat: row.unitMatPrice, lab: row.unitLabPrice };
+  if (!row.qty) return { mat: 0, lab: 0 };
+  return { mat: row.sellMatTotal / row.qty, lab: row.sellLabTotal / row.qty };
+}
+// แถวนี้ถูกนับราคาขายหรือไม่ (แถวแจกแจงขึ้นกับ checkbox)
+function sellCounted(row){
+  return row.flag !== "detail" || document.getElementById("includeDetail").checked;
+}
+
+function render(){
+  const items = parsedRows.filter(x => x.type === "item");
+  const sumSell = items.reduce((s, x) => s + (sellCounted(x) ? x.sellMatTotal + x.sellLabTotal : 0), 0);
+  const sumCost = items.reduce((s, x) => s + x.costMat + x.costLab, 0);
+  const issueCount = items.reduce((s, x) => s + x.issues.length, 0);
+  const detailRows = items.filter(x => x.flag === "detail");
+  const lumpRows = items.filter(x => x.flag === "lump");
+
+  const stats = document.getElementById("stats");
+  stats.innerHTML = `
+    <div class="stat"><div class="label">รายการ (items)</div><div class="value">${items.length}</div></div>
+    <div class="stat"><div class="label">หัวหมวด</div><div class="value">${parsedRows.length - items.length}</div></div>
+    <div class="stat"><div class="label">รวมราคาขาย (BOQ)</div><div class="value" style="color:var(--blue-dark)">${fmt(sumSell)}</div></div>
+    <div class="stat"><div class="label">รวมต้นทุน (Budget)</div><div class="value" style="color:var(--pink-dark)">${fmt(sumCost)}</div></div>
+    <div class="stat ${issueCount ? "warn" : "ok"}"><div class="label">จุดที่ต้องเช็ค</div><div class="value">${issueCount}</div></div>`;
+
+  const checks = document.getElementById("checks");
+  let html = "";
+  if (grandTotals) {
+    const diff = sumSell - grandTotals.sell;
+    html += Math.abs(diff) <= 1
+      ? `<div class="pass">ยอดรวมราคาขาย ตรงกับ "รวมค่าก่อสร้างทั้งหมด" ในไฟล์เดิม (${fmt(grandTotals.sell)})</div>`
+      : `<div class="fail">ยอดรวมราคาขาย (${fmt(sumSell)}) ต่างจากไฟล์เดิม (${fmt(grandTotals.sell)}) อยู่ ${fmt(diff)} บาท</div>`;
+    const costRef = grandTotals.costMat + grandTotals.costLab;
+    if (costRef > 0) {
+      const cdiff = sumCost - costRef;
+      html += Math.abs(cdiff) <= 1
+        ? `<div class="pass">ยอดรวมต้นทุน ตรงกับไฟล์เดิม (${fmt(costRef)})</div>`
+        : `<div class="fail">ยอดรวมต้นทุน (${fmt(sumCost)}) ต่างจากไฟล์เดิม (${fmt(costRef)}) อยู่ ${fmt(cdiff)} บาท</div>`;
+    }
+  } else {
+    html += `<div class="fail">ไม่พบแถว "รวมค่าก่อสร้างทั้งหมด" — เทียบยอดรวมกับไฟล์เดิมไม่ได้ (ยังแปลง/Export ได้ตามปกติ)</div>`;
+  }
+  const badRows = items.filter(x => x.issues.length);
+  if (badRows.length) html += `<div class="fail">มี ${badRows.length} แถวที่ราคาต่อหน่วยเดิมไม่ตรงกับยอดรวม — ระบบใช้ ยอดรวม÷QTY แทน (ไฮไลต์แดง, ชี้เมาส์ดูรายละเอียด)</div>`;
+  if (lumpRows.length) html += `<div class="pass">พบ ${lumpRows.length} แถวเหมารวมที่ไม่มี QTY (เช่น "คงเหลือ") — นับเป็น QTY 1 เพื่อไม่ให้ต้นทุนตกหล่น</div>`;
+  if (detailRows.length) {
+    const detailSum = detailRows.reduce((s, x) => s + x.sellMatTotal + x.sellLabTotal, 0);
+    html += `<div class="fail">พบ ${detailRows.length} แถวแจกแจงรายละเอียด (มียอดขาย ${fmt(detailSum)} แต่ไฟล์เดิมไม่นับในยอดรวม — แสดงสีเทาในตาราง)
+      <label style="margin-left:8px; font-weight:600"><input type="checkbox" id="includeDetailProxy" onchange="document.getElementById('includeDetail').checked=this.checked; render();"> นับราคาขายของแถวเหล่านี้ด้วย</label></div>`;
+  }
+  checks.innerHTML = html;
+  if (detailRows.length) {
+    const proxy = document.getElementById("includeDetailProxy");
+    if (proxy) proxy.checked = document.getElementById("includeDetail").checked;
+  }
+
+  const tbody = document.querySelector("#preview tbody");
+  tbody.innerHTML = "";
+  for (const row of parsedRows) {
+    const tr = document.createElement("tr");
+    if (row.type === "section") {
+      tr.className = "section";
+      tr.innerHTML = `<td colspan="9">${row.desc}</td>`;
+    } else {
+      tr.className = "item";
+      const counted = sellCounted(row);
+      if (!counted) tr.style.opacity = ".45";
+      const bad = row.issues.length ? ' style="outline:2px solid var(--red); outline-offset:-2px"' : "";
+      const u = sellUnit(row);
+      const costMatU = row.qty ? row.costMat / row.qty : 0;
+      const costLabU = row.qty ? row.costLab / row.qty : 0;
+      const tag = row.flag === "lump" ? " 🧾เหมารวม" : row.flag === "ref" ? " 📌ราคาอ้างอิง" : row.flag === "detail" ? " (แจกแจง)" : "";
+      tr.innerHTML = `<td class="desc"${bad} title="${row.issues.join(" | ")}">${row.desc}<small style="color:#888">${tag}</small></td>
+        <td class="num">${row.qty == null ? "-" : fmt(row.qty)}</td><td>${row.unit}</td>
+        <td class="num budget">${fmt(costMatU)}</td><td class="num budget">${fmt(costLabU)}</td><td class="num budget">${fmt(row.costMat + row.costLab)}</td>
+        <td class="num boq">${fmt(u.mat)}</td><td class="num boq">${fmt(u.lab)}</td><td class="num boq">${counted ? fmt(row.sellMatTotal + row.sellLabTotal) : "ไม่นับ"}</td>`;
+    }
+    tbody.appendChild(tr);
+  }
+  document.getElementById("summary").style.display = "block";
+}
+
+// ---------- template override ----------
+document.getElementById("changeTemplateBtn").addEventListener("click", () => document.getElementById("templateInput").click());
+document.getElementById("templateInput").addEventListener("change", async e => {
+  if (!e.target.files[0]) return;
+  templateBuffer = await e.target.files[0].arrayBuffer();
+  document.getElementById("status").textContent = "ใช้ Template: " + e.target.files[0].name;
+});
+
+// ---------- export ----------
+document.getElementById("exportBtn").addEventListener("click", async () => {
+  const status = document.getElementById("status");
+  try {
+    status.textContent = "กำลังสร้างไฟล์...";
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(templateBuffer.slice(0));
+    const ws = wb.worksheets[0];
+
+    // เก็บสไตล์จากแถวตัวอย่างของ template ก่อนลบ (แถว 6 = item, แถว 4 = หัวหมวด)
+    const itemStyle = {}, sectionStyle = {};
+    for (let c = 1; c <= 28; c++) {
+      itemStyle[c] = JSON.parse(JSON.stringify(ws.getRow(6).getCell(c).style || {}));
+      sectionStyle[c] = JSON.parse(JSON.stringify(ws.getRow(4).getCell(c).style || {}));
+    }
+    // ลบแถวตัวอย่างเดิม (แถว 4 ถึงท้าย)
+    if (ws.rowCount >= 4) ws.spliceRows(4, ws.rowCount - 3);
+
+    const jobCode = document.getElementById("jobCode").value.trim();
+    const groupCode = document.getElementById("groupCode").value.trim();
+    const groupName = document.getElementById("groupName").value.trim();
+
+    let r = 4;
+    for (const row of parsedRows) {
+      const xr = ws.getRow(r);
+      const styles = row.type === "item" ? itemStyle : sectionStyle;
+      for (let c = 1; c <= 28; c++) xr.getCell(c).style = styles[c];
+      xr.getCell(1).value = jobCode;      // A Job Code
+      xr.getCell(2).value = groupCode;    // B Group Code
+      xr.getCell(3).value = groupName;    // C Group Name
+      xr.getCell(4).value = row.desc;     // D Description
+      if (row.type === "item") {
+        xr.getCell(10).value = row.unit;                    // J Unit Name
+        if (row.qty != null) xr.getCell(13).value = row.qty; // M QTY (Budget) — แถวราคาอ้างอิงปล่อยว่าง
+        if (row.qty != null) {
+          // Budget: ต้นทุนรวมจากไฟล์เดิม ÷ QTY (สูตรแบบเดียวกับตัวอย่างใน template ยอดรวมตรงเป๊ะ)
+          xr.getCell(14).value = row.costMat ? { formula: `${row.costMat.toFixed(2)}/M${r}` } : 0;   // N Material Price
+          xr.getCell(15).value = { formula: `N${r}*M${r}` };                                         // O Material Amount
+          xr.getCell(16).value = row.costLab ? { formula: `${row.costLab.toFixed(2)}/M${r}` } : 0;   // P Labour Price
+          xr.getCell(17).value = { formula: `P${r}*M${r}` };                                         // Q Labour Amount
+          xr.getCell(18).value = { formula: `M${r}` };                                               // R QTY (BOQ)
+        }
+        // BOQ: ราคาขายต่อหน่วย — ถ้าราคาต่อหน่วยเดิมตรงกับยอดรวมใช้ค่าเดิม, ไม่ตรงใช้สูตร ยอดรวม/QTY
+        const counted = sellCounted(row);
+        const sMat = !counted ? 0
+          : row.flag === "ref" ? row.unitMatPrice
+          : Math.abs(row.unitMatPrice * row.qty - row.sellMatTotal) <= 1 ? row.unitMatPrice
+          : { formula: `${row.sellMatTotal.toFixed(2)}/R${r}` };
+        const sLab = !counted ? 0
+          : row.flag === "ref" ? row.unitLabPrice
+          : Math.abs(row.unitLabPrice * row.qty - row.sellLabTotal) <= 1 ? row.unitLabPrice
+          : { formula: `${row.sellLabTotal.toFixed(2)}/R${r}` };
+        xr.getCell(19).value = sMat;                        // S Material Price
+        xr.getCell(20).value = { formula: `S${r}*R${r}` };  // T Material Amount
+        xr.getCell(21).value = sLab;                        // U Labour Price
+        xr.getCell(22).value = { formula: `U${r}*R${r}` };  // V Labour Amount
+        if (row.flag === "detail" && !counted) xr.getCell(26).value = "แถวแจกแจงรายละเอียด — ไฟล์เดิมไม่นับในยอดรวม"; // Z Remark
+        if (row.flag === "lump") xr.getCell(26).value = "แถวเหมารวม (ไม่มี QTY ในไฟล์เดิม นับเป็น 1)";
+        if (row.flag === "ref") xr.getCell(26).value = "ราคาอ้างอิง (ไม่มี QTY ในไฟล์เดิม)";
+      }
+      xr.commit();
+      r++;
+    }
+
+    const out = await wb.xlsx.writeBuffer();
+    const blob = new Blob([out], {type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    const d = new Date(), pad = x => String(x).padStart(2, "0");
+    a.download = `BOQ_Template_${sourceName || "export"}_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    status.textContent = `✅ Export สำเร็จ (${parsedRows.length} แถว)`;
+  } catch (err) {
+    console.error(err);
+    status.textContent = "❌ Export ไม่สำเร็จ: " + err.message;
+  }
+});
+</script>
+</body>
+</html>
