@@ -157,6 +157,7 @@ let CODES = null;          // { mat:{P:[[code,name,unit,grp,sub],...], C:[...]},
 let COST_SET = {};         // Set ของ cost code ตาม type สำหรับเช็ค L/S swap
 let POOL = { P: [], C: [] };     // precomputed grams pool สำหรับ mat matching
 let COSTPOOL = { M: [], S: [] }; // precomputed pool สำหรับ cost matching (เฉพาะระดับ detail)
+let MATIDX = new Map();          // mat code → "กลุ่ม หมวด" ของลูก (สะพานหาแม่)
 function loadCodes(){
   const bin = atob(CODES_B64);
   const bytes = new Uint8Array(bin.length);
@@ -167,6 +168,8 @@ function loadCodes(){
     const g = grams(name + " " + sub);
     return { code, name, unit, grp, sub, m: gramMap(g), len: g.length };
   });
+  // index: mat code → ชื่อเต็ม+หมวดของลูก ใช้ชี้แม่ (cost code) ให้อยู่เรื่องเดียวกับลูก
+  for (const t of ["P","C"]) for (const e of POOL[t]) MATIDX.set(e.code, e.name + " " + e.sub);
   for (const t of ["M","S"]) COSTPOOL[t] = CODES.cost[t].filter(x => x[3] === "D").map(([code, grp, sub]) => {
     const gs = grams(sub), ga = grams(grp + " " + sub);
     return { code, grp, sub, mSub: gramMap(gs), lenSub: gs.length, mAll: gramMap(ga), lenAll: ga.length };
@@ -203,6 +206,8 @@ function interCount(qg, m){
   return hit;
 }
 const diceP = (qg, m, len) => (!qg.length || !len) ? 0 : 2 * interCount(qg, m) / (qg.length + len);
+// containment: ชื่อฝั่งรหัสครอบคลุมคำใน query แค่ไหน (ไม่ลงโทษชื่อยาว — เหมาะกับ cost code ที่เป็นหัวข้อใหญ่)
+const contP = (qg, m) => !qg.length ? 0 : interCount(qg, m) / qg.length;
 
 // ---------- unit compatibility ----------
 const UNIT_ALIAS = { "ม.":"เมตร", "เมตร":"เมตร", "เมตร.":"เมตร", "ตร.ม.":"ตรม", "ตร.ม":"ตรม", "ตารางเมตร":"ตรม",
@@ -230,15 +235,20 @@ function matchMat(desc, unit, type){
 }
 
 // ---------- จับคู่ Cost Code (แม่/หัวข้อ) — type = 'M' หรือ 'S' ----------
-// ยึด description เป็นหลัก (75%) หัวหมวดช่วยตัดสิน (25%) — ไม่ให้หัวหมวดลากทุกแถวไปหมวดเดียว
+// กฎแม่-ลูก: แม่ (cost code) ต้องเป็นเรื่องเดียวกับลูก (mat code) ที่เลือกไว้
+// ใช้ containment: หัวข้อไหนครอบคลุมคำของ description + ชื่อลูก มากสุดชนะ
 const costCache = new Map();
-function matchCost(desc, section, type){
-  const key = type + "|" + section + "|" + desc;
+function matchCost(desc, section, type, matCode){
+  const bridge = matCode ? (MATIDX.get(matCode) || "") : "";
+  const key = type + "|" + section + "|" + desc + "|" + bridge;
   if (costCache.has(key)) return costCache.get(key);
-  const qd = grams(desc), qs = grams(section);
+  // ตัดคำนำหน้า "ค่าจ้างเหมา/ค่าจ้าง/ค่าแรงงาน" ของฝั่ง C ออก ให้เทียบเนื้อหมวดตรง ๆ
+  const strip = s => s.replace(/ค่าจ้างเหมาแรง|ค่าจ้างเหมา|ค่าจ้างแรงงาน|ค่าจ้าง|ค่าแรงงาน|ค่าแรง/g, " ");
+  const qd = grams(strip(desc)), qs = grams(section), qb = grams(strip(bridge));
+  const wB = qb.length ? 0.40 : 0, wD = qb.length ? 0.40 : 0.75, wS = qb.length ? 0.20 : 0.25;
   const scored = [];
   for (const e of COSTPOOL[type]){
-    const s = 0.75 * diceP(qd, e.mSub, e.lenSub) + 0.25 * diceP(qs, e.mAll, e.lenAll);
+    const s = wB * contP(qb, e.mSub) + wD * contP(qd, e.mSub) + wS * contP(qs, e.mAll);
     scored.push([s, e]);
   }
   scored.sort((a, b) => b[0] - a[0]);
@@ -267,6 +277,9 @@ dz.addEventListener("drop", e => { e.preventDefault(); dz.classList.remove("drag
 fi.addEventListener("change", () => { if (fi.files[0]) loadFile(fi.files[0]); });
 
 async function loadFile(file){
+  const dzBig = document.querySelector("#dropzone .big");
+  dzBig.textContent = "⏳ กำลังอ่านไฟล์และจับคู่รหัส Mango... (ประมาณ 10 วินาที)";
+  await new Promise(r => setTimeout(r, 60)); // ให้ข้อความขึ้นจอก่อนเริ่มงานหนัก
   if (!CODES){ try { loadCodes(); } catch(e){ console.error("โหลดฐานรหัสไม่สำเร็จ", e); } }
   sourceName = file.name.replace(/\.(xlsx|xlsm)$/i, "");
   const buf = await file.arrayBuffer();
@@ -291,6 +304,7 @@ async function loadFile(file){
   sel.value = best;
   sel.onchange = () => parseAndRender(sel.value);
   parseAndRender(best);
+  document.querySelector("#dropzone .big").textContent = "✅ " + file.name + " — หยอดไฟล์ใหม่ได้ตลอด";
 }
 
 // ---------- parsing (fixed column layout of the old BOQ form) ----------
@@ -358,13 +372,13 @@ function assignCodes(){
     if (hasMat || (!hasMat && !hasLab)){
       row.pCand = matchMat(row.desc, row.unit, "P");   // G: Mat Code วัสดุ
       row.pSel = row.pCand[0].code;
-      row.mCand = matchCost(row.desc, section, "M");   // K: Cost Code วัสดุ
+      row.mCand = matchCost(row.desc, section, "M", row.pSel);  // K: Cost Code วัสดุ — ตามหมวดของลูก
       row.mSel = row.mCand[0].code;
     }
     if (hasLab){
       row.cCand = matchMat(row.desc, row.unit, "C");   // H: Mat Code แรง
       row.cSel = row.cCand[0].code;
-      row.sCand = matchCost(row.desc, section, "S");   // L: Cost Code แรง (default S)
+      row.sCand = matchCost(row.desc, section, "S", row.cSel);  // L: Cost Code แรง — ตามหมวดของลูก (default S)
       row.sSel = row.sCand[0].code;
       row.ls = "S";                                    // ค่าเริ่มต้น S, เปลี่ยนเป็น L ได้
     }
@@ -486,7 +500,7 @@ function codeSelect(idx, selField, candField){
   const cls = row[selField + "User"] ? "c-hi" : confClass(cur.score);
   const opts = cands.map(c =>
     `<option value="${c.code}" ${c.code === sel ? "selected" : ""}>${c.code} · ${c.name}${c.unit ? " (" + c.unit + ")" : ""} · ${(c.score * 100).toFixed(0)}%</option>`).join("");
-  return `<select class="code ${cls}" title="${cur.code} ${cur.name}" onchange="setCode(${idx},'${selField}',this)">${opts}</select>`;
+  return `<select class="code ${cls}" id="sel-${idx}-${selField}" title="${cur.code} ${cur.name}" onchange="setCode(${idx},'${selField}',this)">${opts}</select>`;
 }
 function lsSelect(idx){
   const row = parsedRows[idx];
@@ -496,11 +510,23 @@ function lsSelect(idx){
     <option value="L" ${row.ls === "L" ? "selected" : ""}>L</option></select>`;
 }
 function setCode(idx, field, el){
-  parsedRows[idx][field] = el.value;
-  parsedRows[idx][field + "User"] = true;   // คนเลือกเอง = ยืนยันแล้ว
+  const row = parsedRows[idx];
+  row[field] = el.value;
+  row[field + "User"] = true;   // คนเลือกเอง = ยืนยันแล้ว
   el.className = "code c-hi";
-  const cand = (parsedRows[idx][field.replace("Sel", "Cand")] || []).find(c => c.code === el.value);
+  const cand = (row[field.replace("Sel", "Cand")] || []).find(c => c.code === el.value);
   if (cand) el.title = cand.code + " " + cand.name;
+  // กฎแม่-ลูก: เปลี่ยนลูก (Mat Code) → คำนวณแม่ (Cost Code) ใหม่ตามหมวดของลูก เว้นแต่คนยืนยันแม่ไปแล้ว
+  const dep = field === "pSel" ? ["mCand", "mSel", "M"] : field === "cSel" ? ["sCand", "sSel", "S"] : null;
+  if (dep){
+    const [candF, selF, type] = dep;
+    if (!row[selF + "User"]){
+      row[candF] = matchCost(row.desc, row.section || "", type, el.value);
+      row[selF] = row[candF][0].code;
+      const depEl = document.getElementById(`sel-${idx}-${selF}`);
+      if (depEl) depEl.outerHTML = codeSelect(idx, selF, candF);
+    }
+  }
 }
 
 // ---------- template override ----------
